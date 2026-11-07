@@ -1652,6 +1652,11 @@ struct UserSettings {
     // rule is in resolve_selected_disc() (runtime/src/main.cpp): the index
     // names the disc, disc_path only survives when it is that same disc.
     bool has_disc_index     = false; int  disc_index     = 1;
+    // [disc] disc_read_cache: the Performance > Disc read cache toggle
+    // ("system.cache" in psx_runtime_menu.c). Default on; persisted when the
+    // player flips it in the runtime menu so the choice survives restarts,
+    // and re-applied at startup before the guest runs.
+    bool has_disc_read_cache = false; bool disc_read_cache = true;
     bool has_memcard_dir    = false; std::filesystem::path memcard_dir;
     // Per-slot memory-card overrides. An explicit card path overrides the
     // <dir>/card<N>.mcd default; the enable flag inserts/removes the card.

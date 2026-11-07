@@ -3360,6 +3360,10 @@ UserSettings load_user_settings(const fs::path& path) {
             s.disc_index = n < 1 ? 1 : n;
             s.has_disc_index = true;
         });
+        if (d.contains("disc_read_cache")) try_get([&]{
+            s.disc_read_cache = toml::find<bool>(d, "disc_read_cache");
+            s.has_disc_read_cache = true;
+        });
     }
     if (doc.contains("memcard")) {
         const toml::value& m = toml::find(doc, "memcard");
@@ -3589,7 +3593,7 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
     }
     if (s.has_bios_path)
         f << "\n[bios]\npath = \"" << rel(s.bios_path) << "\"\n";
-    if (s.has_disc_path || s.has_disc_index) {
+    if (s.has_disc_path || s.has_disc_index || s.has_disc_read_cache) {
         f << "\n[disc]\n";
         if (s.has_disc_path)
             f << "path = \"" << rel(s.disc_path) << "\"\n";
@@ -3597,6 +3601,8 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
          * for a single-disc one, where it is always 1. */
         if (s.has_disc_index)
             f << "selected = " << s.disc_index << "\n";
+        if (s.has_disc_read_cache)
+            f << "disc_read_cache = " << (s.disc_read_cache ? "true" : "false") << "\n";
     }
     if (s.has_memcard_dir || s.has_memcard1_path || s.has_memcard2_path ||
         s.has_memcard1_enabled || s.has_memcard2_enabled) {

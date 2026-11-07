@@ -20164,6 +20164,10 @@ int main(int argc, char** argv) {
         std::filesystem::path settings;
     };
     DiscMenuSession disc_menu_session{};
+    /* Capture-less menu callbacks cannot reach disc_menu_session; the disc
+     * read-cache persist hook reads this instead. Static storage: it must
+     * outlive the runtime menu across session reboots. */
+    static std::filesystem::path g_disc_cache_settings_path;
 
 session_reboot:
     /* A new backend/session must not inherit the prior applied settings or
@@ -20635,6 +20639,7 @@ session_reboot:
     }
     disc_menu_session = { &selected_disc_index, &disc_path_str, &resolved_disc,
                           exe_dir_from_argv(argv[0]) / "settings.toml" };
+    g_disc_cache_settings_path = disc_menu_session.settings;
     psx_disc_tray_set_host_hook([](void *ctx, int disc, const char *path) {
         auto &session = *static_cast<DiscMenuSession*>(ctx);
         *session.selected = disc;
@@ -20653,6 +20658,24 @@ session_reboot:
         host_osd_push(message, 2500);
     }, &disc_menu_session);
     psx_runtime_menu_init();
+    {
+        /* Restore the persisted disc-read-cache preference after init (init
+         * applies the default). The menu row reads the same static, so the
+         * Performance row shows the restored value. */
+        PSXRecompV4::UserSettings us =
+            PSXRecompV4::load_user_settings(disc_menu_session.settings);
+        if (!us.parse_error && us.has_disc_read_cache)
+            psx_runtime_menu_set_disc_cache(us.disc_read_cache ? 1 : 0);
+    }
+    psx_runtime_menu_set_disc_cache_persist_cb([](int enabled) {
+        if (g_disc_cache_settings_path.empty()) return;
+        PSXRecompV4::UserSettings us =
+            PSXRecompV4::load_user_settings(g_disc_cache_settings_path);
+        if (us.parse_error) return;
+        us.disc_read_cache = enabled != 0;
+        us.has_disc_read_cache = true;
+        PSXRecompV4::save_user_settings(g_disc_cache_settings_path, us);
+    });
     for (const auto& route : warm_cd_routes) {
         cdrom_register_warm_route(route.arm_lba, route.lbas.data(),
                                   (int)route.lbas.size(),

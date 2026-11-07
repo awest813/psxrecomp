@@ -15,6 +15,11 @@ void psx_runtime_menu_input(int input, int repeat);
 int psx_runtime_menu_selected_disc(void);
 int psx_runtime_menu_select_disc(int disc);
 int psx_runtime_menu_insert(void);
+/* Disc read cache: live value shared with the Performance menu row.
+ * set_disc_cache applies the value without persisting (startup restore);
+ * set_disc_cache_persist_cb registers the settings.toml writer (main.cpp). */
+void psx_runtime_menu_set_disc_cache(int enabled);
+void psx_runtime_menu_set_disc_cache_persist_cb(void (*cb)(int));
 int psx_runtime_menu_overlay_image(const uint32_t **pixels, int *w, int *h);
 struct RecompRuntimeUi;
 struct RecompRuntimeUi *psx_runtime_menu_model(void);

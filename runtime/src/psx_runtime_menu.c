@@ -27,6 +27,7 @@ static int enabled(void *ctx, const RecompRuntimeUiItem *item) {
         psx_disc_tray_disc_count() > 1 && !psx_netplay_active() : 1;
 }
 static int s_cache_enabled = 1;
+static void (*s_cache_persist_cb)(int) = NULL;
 static int get_value(void *ctx, const RecompRuntimeUiItem *item, int *out) {
     (void)ctx;
     if (item && !strcmp(item->key, "system.cache")) { *out = s_cache_enabled; return 1; }
@@ -43,9 +44,17 @@ static int set_value(void *ctx, const RecompRuntimeUiItem *item, int value) {
     if (item && !strcmp(item->key, "system.cache")) {
         s_cache_enabled = value ? 1 : 0;
         iso_reader_set_cache_enabled(s_cache_enabled);
+        if (s_cache_persist_cb) s_cache_persist_cb(s_cache_enabled);
         return 1;
     }
     return psx_runtime_menu_select_disc(value);
+}
+void psx_runtime_menu_set_disc_cache(int enabled) {
+    s_cache_enabled = enabled ? 1 : 0;
+    iso_reader_set_cache_enabled(s_cache_enabled);
+}
+void psx_runtime_menu_set_disc_cache_persist_cb(void (*cb)(int)) {
+    s_cache_persist_cb = cb;
 }
 int psx_runtime_menu_insert(void) {
     if (!psx_runtime_menu_is_open()) return 0;
@@ -135,6 +144,8 @@ int psx_runtime_menu_select_disc(int disc) { (void)disc; return 0; }
 int psx_runtime_menu_insert(void) { return 0; }
 struct RecompRuntimeUi *psx_runtime_menu_model(void) { return NULL; }
 void psx_runtime_menu_set_fallback_enabled(int enabled) { (void)enabled; }
+void psx_runtime_menu_set_disc_cache(int enabled) { (void)enabled; }
+void psx_runtime_menu_set_disc_cache_persist_cb(void (*cb)(int)) { (void)cb; }
 int psx_runtime_menu_overlay_image(const uint32_t **p, int *w, int *h) {
     (void)p; (void)w; (void)h; return 0;
 }
