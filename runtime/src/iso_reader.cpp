@@ -8,6 +8,13 @@
 #include <cstdio>
 #include <limits>
 
+// Global disc-read cache toggle (user-facing, default on).
+static bool g_disc_cache_enabled = true;
+
+extern "C" void iso_reader_set_cache_enabled(int enabled) {
+    g_disc_cache_enabled = (enabled != 0);
+}
+
 namespace PS1 {
 
 // PS1 CD-ROM sector size (Mode 2, Form 1 user data)
@@ -189,6 +196,9 @@ ISOReader::ISOReader()
     : is_open_(false) {
     root_dir_.lba = 0;
     root_dir_.size = 0;
+    read_cache_valid_ = false;
+    read_cache_segment_ = -1;
+    read_cache_next_pos_ = 0;
 }
 
 ISOReader::~ISOReader() {
@@ -356,6 +366,12 @@ bool ISOReader::Open(const std::string& filename) {
     for (const std::string& bin_name : bin_files) {
         BinSegment seg;
         seg.path = bin_name;
+        // Larger read buffer reduces ReadFile syscalls during sequential
+        // FMV/XA sector reads.
+        seg.file_buf_size = 1 << 16;  // 64 KB
+        seg.file_buf = std::make_unique<char[]>(seg.file_buf_size);
+        seg.file.rdbuf()->pubsetbuf(seg.file_buf.get(),
+                                   (std::streamsize)seg.file_buf_size);
         seg.file.open(bin_name, std::ios::binary);
         if (!seg.file.is_open()) {
             Close();
@@ -503,6 +519,9 @@ void ISOReader::Close() {
     segments_.clear();
     spans_.clear();
     disc_sector_count_ = 0;
+    read_cache_valid_ = false;
+    read_cache_segment_ = -1;
+    read_cache_next_pos_ = 0;
     tracks_.clear();
     subq_replacements_.clear();
     bin_path_.clear();
@@ -624,41 +643,72 @@ bool ISOReader::ReadSector(uint32_t lba, uint8_t* buffer) {
     BinSegment* seg = &segments_[(size_t)span->segment];
     const uint32_t local_lba = span->file_sector + (lba - span->disc_start);
 
-    // Clear any error flags from a previous failed read
-    seg->file.clear();
+    const int seg_idx = span->segment;
 
     if (seg->raw) {
-        // Raw BIN format - read full sector, extract user data
-        std::streampos offset =
+        // Raw BIN: user data at offset 24 within each 2352-byte sector.
+        const std::streampos offset =
             static_cast<std::streampos>(local_lba) * RAW_SECTOR_SIZE + RAW_DATA_OFFSET;
-        seg->file.seekg(offset, std::ios::beg);
-
-        if (!seg->file.good()) {
+        if (!(g_disc_cache_enabled && read_cache_valid_ && read_cache_segment_ == seg_idx &&
+              read_cache_next_pos_ == offset)) {
             seg->file.clear();
-            return false;
+            seg->file.seekg(offset, std::ios::beg);
+            if (!seg->file.good()) {
+                seg->file.clear();
+                read_cache_valid_ = false;
+                return false;
+            }
         }
-
         seg->file.read(reinterpret_cast<char*>(buffer), SECTOR_SIZE);
-        std::streamsize bytes_read = seg->file.gcount();
-        bool success = (bytes_read == SECTOR_SIZE);
-        seg->file.clear();
-        return success;
-    } else {
-        // ISO format - sectors are already 2048 bytes
-        std::streampos offset = static_cast<std::streampos>(local_lba) * SECTOR_SIZE;
-        seg->file.seekg(offset, std::ios::beg);
-
-        if (!seg->file.good()) {
-            seg->file.clear();
-            return false;
+        const std::streamsize bytes_read = seg->file.gcount();
+        const bool success = (bytes_read == (std::streamsize)SECTOR_SIZE);
+        if (success) {
+            read_cache_valid_ = true;
+            read_cache_segment_ = seg_idx;
+            // Skip the 304-byte inter-sector gap so the file is positioned
+            // at the next sector's user data on the following read.
+            seg->file.seekg(RAW_SECTOR_SIZE - SECTOR_SIZE, std::ios::cur);
+            if (!seg->file.good()) {
+                seg->file.clear();
+                read_cache_valid_ = false;
+                return success;
+            }
+            read_cache_next_pos_ =
+                static_cast<std::streampos>(local_lba + 1) * RAW_SECTOR_SIZE +
+                RAW_DATA_OFFSET;
+        } else {
+            read_cache_valid_ = false;
         }
-
-        seg->file.read(reinterpret_cast<char*>(buffer), SECTOR_SIZE);
-        std::streamsize bytes_read = seg->file.gcount();
-        bool success = (bytes_read == SECTOR_SIZE);
         seg->file.clear();
         return success;
     }
+
+    // Cooked ISO: 2048-byte sectors, no gap; file position naturally
+    // advances to the next sector after a successful read.
+    const std::streampos offset =
+        static_cast<std::streampos>(local_lba) * SECTOR_SIZE;
+    if (!(g_disc_cache_enabled && read_cache_valid_ && read_cache_segment_ == seg_idx &&
+          read_cache_next_pos_ == offset)) {
+        seg->file.clear();
+        seg->file.seekg(offset, std::ios::beg);
+        if (!seg->file.good()) {
+            seg->file.clear();
+            read_cache_valid_ = false;
+            return false;
+        }
+    }
+    seg->file.read(reinterpret_cast<char*>(buffer), SECTOR_SIZE);
+    const std::streamsize bytes_read = seg->file.gcount();
+    const bool success = (bytes_read == (std::streamsize)SECTOR_SIZE);
+    if (success) {
+        read_cache_valid_ = true;
+        read_cache_segment_ = seg_idx;
+        read_cache_next_pos_ = offset + static_cast<std::streamoff>(SECTOR_SIZE);
+    } else {
+        read_cache_valid_ = false;
+    }
+    seg->file.clear();
+    return success;
 }
 
 bool ISOReader::ReadRawSector(uint32_t lba, uint8_t* buffer) {
@@ -683,18 +733,30 @@ bool ISOReader::ReadRawSector(uint32_t lba, uint8_t* buffer) {
         return false;
     }
     const uint32_t local_lba = span->file_sector + (lba - span->disc_start);
+    const int seg_idx = span->segment;
 
-    seg->file.clear();
-    std::streampos offset = static_cast<std::streampos>(local_lba) * RAW_SECTOR_SIZE;
-    seg->file.seekg(offset, std::ios::beg);
-    if (!seg->file.good()) {
+    const std::streampos offset =
+        static_cast<std::streampos>(local_lba) * RAW_SECTOR_SIZE;
+    if (!(g_disc_cache_enabled && read_cache_valid_ && read_cache_segment_ == seg_idx &&
+          read_cache_next_pos_ == offset)) {
         seg->file.clear();
-        return false;
+        seg->file.seekg(offset, std::ios::beg);
+        if (!seg->file.good()) {
+            seg->file.clear();
+            read_cache_valid_ = false;
+            return false;
+        }
     }
-
     seg->file.read(reinterpret_cast<char*>(buffer), RAW_SECTOR_SIZE);
-    std::streamsize bytes_read = seg->file.gcount();
-    bool success = (bytes_read == RAW_SECTOR_SIZE);
+    const std::streamsize bytes_read = seg->file.gcount();
+    const bool success = (bytes_read == (std::streamsize)RAW_SECTOR_SIZE);
+    if (success) {
+        read_cache_valid_ = true;
+        read_cache_segment_ = seg_idx;
+        read_cache_next_pos_ = offset + static_cast<std::streamoff>(RAW_SECTOR_SIZE);
+    } else {
+        read_cache_valid_ = false;
+    }
     seg->file.clear();
     return success;
 }

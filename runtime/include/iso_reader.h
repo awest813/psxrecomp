@@ -73,6 +73,8 @@ struct BinSegment {
     uint32_t      start_lba;     // disc sector of this file's first stored sector
     uint32_t      sector_count;  // sectors stored in this file
     bool          raw;           // 2352-byte raw sectors (BIN) vs 2048 (ISO)
+    std::unique_ptr<char[]> file_buf;  // read buffer for the stream
+    size_t        file_buf_size = 0;
 };
 
 /**
@@ -266,6 +268,12 @@ private:
     uint32_t disc_sector_count_ = 0;    // BIN/CUE: end of the last span
     std::unique_ptr<CHDState> chd_; // present only for a directly mounted CHD
     std::unordered_map<uint32_t, std::array<uint8_t, 12>> subq_replacements_;
+
+    // Sequential-read cache: avoids re-seeking the underlying file when
+    // sectors are read in ascending order (common during FMV/XA playback).
+    bool    read_cache_valid_ = false;
+    int     read_cache_segment_ = -1;
+    std::streampos read_cache_next_pos_ = 0;
 };
 
 } // namespace PS1

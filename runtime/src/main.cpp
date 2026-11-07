@@ -8549,6 +8549,18 @@ static void runtime_menu_host_loop(void) {
             } else if (ev.type == SDL_CONTROLLERDEVICEREMOVED) {
                 close_controller();
                 refresh_player_devices();
+            } else if (ev.type == SDL_MOUSEBUTTONDOWN) {
+                if (psx_runtime_menu_is_open()) {
+                    if (ev.button.button == SDL_BUTTON_LEFT)
+                        psx_runtime_menu_input(PSX_MENU_ACCEPT, 0);
+                    else if (ev.button.button == SDL_BUTTON_RIGHT)
+                        psx_runtime_menu_input(PSX_MENU_BACK, 0);
+                }
+            } else if (ev.type == SDL_MOUSEWHEEL) {
+                if (psx_runtime_menu_is_open()) {
+                    if (ev.wheel.y > 0) psx_runtime_menu_input(PSX_MENU_UP, 0);
+                    else if (ev.wheel.y < 0) psx_runtime_menu_input(PSX_MENU_DOWN, 0);
+                }
             } else if (ev.type == SDL_KEYDOWN) {
 #if defined(PSX_SDL3)
                 const SDL_Keycode key = ev.key.key;
@@ -20888,6 +20900,11 @@ session_reboot:
                 cfg.source_rate = 44100.0;            /* SPU render rate */
                 cfg.host_rate   = (double)have.freq;  /* actual device rate */
                 cfg.target_ms   = (double)resolved_audio_buffer_ms;
+                /* Host crystal and the guest frame clock can differ by more
+                 * than the stock 0.5% clamp; a saturated clamp walks the ring
+                 * into periodic overflow/underrun. 2% keeps the servo in range
+                 * at a pitch shift small enough to be inaudible. */
+                cfg.max_correction = 0.02;
                 if (rab_init(&s_drc, &cfg) == 0) s_drc_ready = true;
             }
             g_audio_host_rate = have.freq;

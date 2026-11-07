@@ -12,6 +12,8 @@
 
 extern "C" {
 
+extern "C" void iso_reader_set_cache_enabled(int enabled);
+
 void* iso_open(const char* path) {
     auto* reader = new PS1::ISOReader();
     if (!reader->Open(path)) {

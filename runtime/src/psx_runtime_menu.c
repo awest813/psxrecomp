@@ -1,6 +1,7 @@
 #include "psx_runtime_menu.h"
 #include "psx_disc_tray.h"
 #include "psx_netplay.h"
+extern void iso_reader_set_cache_enabled(int enabled);
 #include <stdio.h>
 #include <string.h>
 
@@ -15,6 +16,8 @@ static RecompRuntimeUiItem s_items[] = {
      RECOMP_RUNTIME_UI_INT, 1, 1, 1, NULL, 0, NULL},
     {"media.insert", "Disc", "Insert disc and resume", "Change the disc while keeping your game running.",
      RECOMP_RUNTIME_UI_ACTION, 0, 0, 0, NULL, 0, NULL},
+    {"system.cache", "Performance", "Disc read cache", "Cache disc sectors for smoother FMV playback.",
+     RECOMP_RUNTIME_UI_BOOL, 0, 1, 1, NULL, 0, NULL},
     {"system.resume", "Game", "Resume", "Return to your game without changing discs.",
      RECOMP_RUNTIME_UI_ACTION, 0, 0, 0, NULL, 0, NULL},
 };
@@ -23,8 +26,11 @@ static int enabled(void *ctx, const RecompRuntimeUiItem *item) {
     return !strncmp(item->key, "media.", 6) ?
         psx_disc_tray_disc_count() > 1 && !psx_netplay_active() : 1;
 }
+static int s_cache_enabled = 1;
 static int get_value(void *ctx, const RecompRuntimeUiItem *item, int *out) {
-    (void)ctx; (void)item; *out = s_disc; return 1;
+    (void)ctx;
+    if (item && !strcmp(item->key, "system.cache")) { *out = s_cache_enabled; return 1; }
+    *out = s_disc; return 1;
 }
 int psx_runtime_menu_select_disc(int disc) {
     if (!psx_runtime_menu_is_open() || disc < 1 ||
@@ -33,7 +39,12 @@ int psx_runtime_menu_select_disc(int disc) {
     return 1;
 }
 static int set_value(void *ctx, const RecompRuntimeUiItem *item, int value) {
-    (void)ctx; (void)item;
+    (void)ctx;
+    if (item && !strcmp(item->key, "system.cache")) {
+        s_cache_enabled = value ? 1 : 0;
+        iso_reader_set_cache_enabled(s_cache_enabled);
+        return 1;
+    }
     return psx_runtime_menu_select_disc(value);
 }
 int psx_runtime_menu_insert(void) {
@@ -65,14 +76,15 @@ void psx_runtime_menu_init(void) {
     s_ui = NULL;
     s_disc = 0;
     s_fallback_enabled = 1;
+    iso_reader_set_cache_enabled(s_cache_enabled);
     if (psx_disc_tray_disc_count() < 2) return;
     s_items[0].maximum = psx_disc_tray_disc_count();
     RecompRuntimeUiConfig config = {0};
     config.title = "Game menu";
     config.subtitle = s_mounted;
     config.theme = "psx";
-    config.accept_label = "Enter / Cross";
-    config.back_label = "Esc / Circle";
+    config.accept_label = "Enter / Cross / Click";
+    config.back_label = "Esc / Circle / Right-click";
     config.items = s_items;
     config.item_count = sizeof s_items / sizeof s_items[0];
     config.callbacks.get_value = get_value;
