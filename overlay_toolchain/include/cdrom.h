@@ -8,6 +8,8 @@ extern "C" {
 #endif
 
 void cdrom_init(const char* cue_path);
+uint32_t cdrom_snapshot_bytes(void);
+int cdrom_snapshot_validate(const uint8_t *p, uint32_t len);
 
 /* Did cdrom_init() actually mount an image? 0 = the drive is empty.
  *
@@ -30,6 +32,22 @@ void cdrom_notify_game_started(void);
 /* LBA of the most recent SetLoc command (-1 if none yet). Used by the DMA
  * ring buffer to correlate each sector transfer with its disc position. */
 int  cdrom_get_setloc_lba(void);
+
+/* Trusted opt-in resident adapter: fold a verified Mode2/Form1 data span
+ * after its real ReadN ACK, before the first sector has arrived. The commit
+ * callback copies the complete span to RAM and must not advance guest time.
+ * A zero callback result leaves controller state unchanged. Success retains
+ * the actual final header/FIFO and next drive cursor, cancels sector delivery,
+ * and raises no IRQ; the title must finish its audited SDK completion/Pause.
+ * last_user_data must be the verified final2048-byte payload. */
+int cdrom_resident_complete_read(uint32_t lba, uint32_t sectors,
+    const uint8_t* last_user_data, int (*commit)(void*), void* context);
+
+/* Admit one verified resident data sector into the real ReadN FIFO/IRQ path.
+ * Requires an ACKed stream at lba, no pending controller/DMA/payload owner,
+ * and matching pure-data raw bytes. Never stops the stream or calls a guest
+ * callback. The title must separately prove its destination/upload ownership. */
+int cdrom_resident_feed_sector(uint32_t lba, const uint8_t* user_data);
 
 /* 'instant' per-frame sector-IRQ budget (step 3). Clamped to [1, 4096];
  * the per-sector period additionally floors at CDROM_MIN_DELAY. Writers:

@@ -73,6 +73,8 @@ struct BinSegment {
     uint32_t      start_lba;     // disc sector of this file's first stored sector
     uint32_t      sector_count;  // sectors stored in this file
     bool          raw;           // 2352-byte raw sectors (BIN) vs 2048 (ISO)
+    std::unique_ptr<char[]> file_buf;  // read buffer for the stream
+    size_t        file_buf_size = 0;
 };
 
 /**
@@ -107,6 +109,18 @@ public:
      * @return true if opened successfully, false otherwise
      */
     bool Open(const std::string& filename);
+
+    /**
+     * Sector geometry of the first stored file behind an image, decided the
+     * same way Open() decides it: a .cue's TRACK mode is authoritative; a bare
+     * file is raw when sector 0 starts with the CD sync pattern. File length
+     * is never the evidence (raw dumps can be a multiple of 2048).
+     * @param path .cue or bare .bin/.iso/.img
+     * @param raw  set to true for 2352-byte raw sectors, false for 2048
+     * @return false when the image cannot be opened or its geometry is not
+     *         mountable (conflicting or MODE2/2336 track modes)
+     */
+    static bool FirstFileIsRaw(const std::string& path, bool* raw);
 
     /**
      * Close the currently open file
@@ -254,6 +268,12 @@ private:
     uint32_t disc_sector_count_ = 0;    // BIN/CUE: end of the last span
     std::unique_ptr<CHDState> chd_; // present only for a directly mounted CHD
     std::unordered_map<uint32_t, std::array<uint8_t, 12>> subq_replacements_;
+
+    // Sequential-read cache: avoids re-seeking the underlying file when
+    // sectors are read in ascending order (common during FMV/XA playback).
+    bool    read_cache_valid_ = false;
+    int     read_cache_segment_ = -1;
+    std::streampos read_cache_next_pos_ = 0;
 };
 
 } // namespace PS1

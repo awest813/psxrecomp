@@ -45,6 +45,34 @@ static inline int psx_overlay_code_segment_pc(uint32_t pc) {
 struct OverlayCallbacks;
 const struct OverlayCallbacks *overlay_loader_callbacks(void);
 
+/* Canonical cache arch-abi tag (caches are namespaced per backend AND per
+ * target so a Windows-x64 gcc DLL and, later, a same-OS arm64 build for the
+ * same fragment never comingle). compile_overlays.py
+ * computes the IDENTICAL string; keep the two mappings in lockstep
+ * ("<os>-<arch>": win|linux|macos + x64|arm64|x86). It is this build's own
+ * architecture -- the running slice of a universal macOS binary -- and the
+ * runtime exports it as PSX_OVERLAY_ARCH_ABI to every compile it spawns
+ * (autocompile.c) and passes it to bios_module_build.py, so shards and BIOS
+ * modules are compiled for the architecture that loads them, not for the
+ * architecture of the Python or the compiler binary. */
+#if defined(_WIN32)
+#  define PSX_OVERLAY_ARCH_OS_ "win"
+#elif defined(__APPLE__)
+#  define PSX_OVERLAY_ARCH_OS_ "macos"
+#else
+#  define PSX_OVERLAY_ARCH_OS_ "linux"
+#endif
+#if defined(__aarch64__) || defined(_M_ARM64)
+#  define PSX_OVERLAY_ARCH_CPU_ "arm64"
+#elif defined(__x86_64__) || defined(_M_X64)
+#  define PSX_OVERLAY_ARCH_CPU_ "x64"
+#elif defined(__i386__) || defined(_M_IX86)
+#  define PSX_OVERLAY_ARCH_CPU_ "x86"
+#else
+#  define PSX_OVERLAY_ARCH_CPU_ "unknown"
+#endif
+#define PSX_OVERLAY_ARCH_ABI PSX_OVERLAY_ARCH_OS_ "-" PSX_OVERLAY_ARCH_CPU_
+
 /* "<os>-<arch>" of this build (PSX_OVERLAY_ARCH_ABI), the cache layout's
  * arch-abi segment. Also keyed into the BIOS module cache. */
 const char *overlay_loader_arch_abi(void);
@@ -90,6 +118,10 @@ void overlay_loader_resync_validation_after_restore(void);
  * checked-regions memo so the next dispatch reconsiders the cache. Idempotent
  * (loaded DLLs stay loaded); emu thread only. */
 void overlay_loader_rescan(void);
+
+/* The codegen hash this runtime was built with (PSX_OVERLAY_CODEGEN_HASH, 0 if unknown). It names the
+ * shard cache directory, so a toolchain staged from a different emitter writes where nobody reads. */
+unsigned overlay_loader_codegen_hash(void);
 
 /* Two-phase live publication: the compile-output watcher maps a freshly
  * published image off the emulation thread, then the emulation thread performs
