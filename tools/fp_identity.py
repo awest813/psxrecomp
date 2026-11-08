@@ -280,12 +280,21 @@ def drive(proc, args, log_path):
                            f"{args.timeout}s (see {log_path})")
         time.sleep(0.2)
     replies = []
-    for req, timeout in (({"cmd": "frame_fingerprint",
-                           "count": min(args.frames + 1, RING_CAP),
-                           "frame_lo": 0, "frame_hi": args.frames}, 300),
-                         ({"cmd": "dispatch_stats"}, 120)):
+    # frame_fingerprint is fetched in frame-window pages: one request for a
+    # multi-thousand-frame run builds a multi-megabyte response, and the
+    # debug server's send_all_blocking gives a 2 s SO_SNDTIMEO per 1 MiB
+    # chunk -- a long single send can stall out mid-stream and the client
+    # then sees truncated JSON. Pages of a few thousand frames stay small
+    # and re-ask per window.
+    FP_PAGE = 4000
+    fp = {}
+    lo = 0
+    while lo <= args.frames:
+        hi = min(lo + FP_PAGE - 1, args.frames)
         try:
-            reply = ask(port, req, timeout)
+            reply = ask(port, {"cmd": "frame_fingerprint",
+                               "count": FP_PAGE,
+                               "frame_lo": lo, "frame_hi": hi}, 300)
         except (OSError, ValueError) as e:
             # A crash, a dropped connection or a socket timeout after frame
             # N: no dump, so INCOMPLETE rather than a traceback.
@@ -295,16 +304,36 @@ def drive(proc, args, log_path):
                 pass
             state = ("exited (status %s)" % proc.returncode
                      if proc.returncode is not None else "did not answer")
-            raise RunError(f"runtime {state} on {req['cmd']} after reaching "
+            raise RunError(f"runtime {state} on frame_fingerprint "
+                           f"[{lo}..{hi}] after reaching "
                            f"frame {frame} ({e!r}; see {log_path})")
         if not isinstance(reply, dict):
-            raise RunError(f"{req['cmd']} replied {reply!r}, not an object")
+            raise RunError(f"frame_fingerprint replied {reply!r}, not an object")
         if reply.get("ok") is False:
-            raise RunError(f"{req['cmd']} failed: {reply.get('error', reply)}")
-        replies.append(reply)
-    fp, stats = replies
-    if "entries" not in fp:
-        raise RunError(f"frame_fingerprint returned no entries: {fp}")
+            raise RunError(f"frame_fingerprint failed: {reply.get('error', reply)}")
+        if "entries" not in reply:
+            raise RunError(f"frame_fingerprint returned no entries: {reply}")
+        if not fp:
+            fp = reply
+        else:
+            fp["entries"].extend(reply.get("entries", []))
+            fp["total"] = reply.get("total", fp.get("total"))
+        lo = hi + 1
+    try:
+        stats = ask(port, {"cmd": "dispatch_stats"}, 120)
+    except (OSError, ValueError) as e:
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            pass
+        state = ("exited (status %s)" % proc.returncode
+                 if proc.returncode is not None else "did not answer")
+        raise RunError(f"runtime {state} on dispatch_stats after reaching "
+                       f"frame {frame} ({e!r}; see {log_path})")
+    if not isinstance(stats, dict):
+        raise RunError(f"dispatch_stats replied {stats!r}, not an object")
+    if stats.get("ok") is False:
+        raise RunError(f"dispatch_stats failed: {stats.get('error', stats)}")
     return fp, stats
 
 
