@@ -317,7 +317,12 @@ def drive(proc, args, log_path):
             fp = reply
         else:
             fp["entries"].extend(reply.get("entries", []))
+            # Keep the server's ring bookkeeping current: the last page's
+            # total/available reflect the ring as a whole, so the compare's
+            # wrap heuristic (total > available) does not fire just because
+            # the dump's entry list stops at the judged window.
             fp["total"] = reply.get("total", fp.get("total"))
+            fp["available"] = reply.get("available", fp.get("available"))
         lo = hi + 1
     try:
         stats = ask(port, {"cmd": "dispatch_stats"}, 120)
