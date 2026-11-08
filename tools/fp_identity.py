@@ -257,6 +257,26 @@ def drive(proc, args, log_path):
                                f"PSX_DEBUG_TOOLS=ON? does the launch pass the "
                                f"port? see {log_path})")
             time.sleep(0.3)
+    # Optional frame-exact input route: the same pad word for the same
+    # guest frames in every run, so an A/B covers menu gameplay rather
+    # than the no-input attract path. Armed right after the server
+    # answers; input_route_start(at_frame=1) keys the steps to vblank
+    # counts, making the replay frame-exact in both runs.
+    if getattr(args, "route", None):
+        with open(args.route, encoding="utf-8-sig") as f:
+            route = json.load(f)
+        steps = route["steps"] if isinstance(route, dict) else route
+        at_frame = (route.get("at_frame", 1) if isinstance(route, dict) else 1)
+        if not isinstance(steps, list) or not steps:
+            raise RunError(f"route {args.route} has no steps")
+        try:
+            for st in steps:
+                ask(port, {"cmd": "input_route_append",
+                           "buttons": int(st["buttons"]),
+                           "frames": int(st["frames"])}, 30)
+            ask(port, {"cmd": "input_route_start", "at_frame": int(at_frame)}, 30)
+        except (OSError, ValueError) as e:
+            raise RunError(f"could not arm input route ({e!r}; see {log_path})")
     start = last_move = time.time()
     last = -1
     while True:
@@ -413,6 +433,8 @@ def cmd_run(args):
                        "seed": os.path.abspath(args.seed) if args.seed
                        else None,
                        "env": record, "port": args.port,
+                       "route": os.path.abspath(args.route) if args.route
+                       else None,
                        "miss_total": stats.get("miss_total"),
                        "miss_unique": stats.get("miss_unique"),
                        "ring_total": fp.get("total"),
@@ -800,6 +822,9 @@ def parser():
                      "(PSX_OVERLAY_AUTOCOMPILE_OFF=0)")
     run.add_argument("--env", action="append", default=[],
                      metavar="KEY=VALUE", help="extra environment (repeatable)")
+    run.add_argument("--route", help="JSON input route: a list of "
+                     "{\"buttons\",\"frames\"} steps, or {\"at_frame\":N,"
+                     "\"steps\":[...]} -- replayed frame-exactly in every run")
     run.add_argument("--boot-timeout", type=float, default=180,
                      help="seconds for the debug server to answer")
     run.add_argument("--stall", type=float, default=120,
